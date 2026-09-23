@@ -184,10 +184,6 @@ Depending on the analysis workflow, tWRM8 can generate:
 
 A biological event represented across three spatial dimensions and time.
 
-### Timeworm
-
-Informal name for the complete spatiotemporal object formed by an event as it evolves through time.
-
 ### Fingerprint
 
 A multidimensional summary of the dynamic-event population within a recording.
@@ -195,26 +191,6 @@ A multidimensional summary of the dynamic-event population within a recording.
 ### Meta-fingerprint
 
 A condition-level representation constructed from multiple recording fingerprints while retaining information about biological variability.
-
-## Name
-
-The project name is written:
-
-# **tWRM8**
-
-The lowercase `t` represents **time**, while `WRM` is derived from the internal concept of a **timeworm**.
-
-The `8` preserves the lineage of the software's predecessor, **S8**.
-
-The original S8 name itself evolved from an internal project name, **Signal Buddy**, in which “Buddy” became `8`.
-
-Thus, hidden underneath the somewhat severe-looking scientific designation:
-
-`tWRM8`
-
-is the considerably less respectable:
-
-**Timeworm Buddy.**
 
 ## Status
 
