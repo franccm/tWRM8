@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use tWRM8 in your research, please cite this software."
+title: "tWRM8: temporal Worldvolume Reconstruction and Morphometry"
+type: software
+authors:
+  - family-names: "Francis"
+    given-names: "Christopher Michael"
+    affiliation: "University of South Alabama"
+repository-code: "https://github.com/franccm/tWRM8"
+url: "https://github.com/franccm/tWRM8"
+version: "1.0.0"
+license: "MIT"
+abstract: >-
+  tWRM8 is a computational platform for reconstruction, quantitative morphometry,
+  and fingerprint analysis of dynamic biological events represented as
+  spatiotemporal hypervolumes.
+keywords:
+  - biological imaging
+  - spatiotemporal analysis
+  - hypervolume
+  - morphometry
+  - dynamic ROI
+  - fluorescence imaging
+  - microscopy
