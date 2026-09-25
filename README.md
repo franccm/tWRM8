@@ -1,4 +1,4 @@
-# tWRM8
+# tWRM8 (temporal Worldvolume Reconstructiona and Morphometry)
 
 **Spatiotemporal hypervolume analysis for dynamic biological signals**
 
@@ -27,8 +27,6 @@ over successive values of
 `t`
 
 defines a four-dimensional structure.
-
-When projected or reconstructed spatially, these structures can resemble trajectories, branches, tubes, or complex evolving organisms. Internally, we sometimes refer to these objects as **timeworms**.
 
 tWRM8 provides tools for detecting these structures and converting them into quantitative biological descriptors.
 
