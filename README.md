@@ -1,4 +1,4 @@
-# tWRM8 (temporal Worldvolume Reconstructiona and Morphometry)
+# tWRM8 (temporal Worldvolume Reconstruction and Morphometry)
 
 **Spatiotemporal hypervolume analysis for dynamic biological signals**
 
