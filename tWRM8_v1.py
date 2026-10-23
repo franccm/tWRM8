@@ -1986,7 +1986,7 @@ class PipelinePanel(QtWidgets.QWidget):
         self.layer_img = None; self.layer_filtered = None; self.layer_mask = None
         self.layer_sel = None; self.layer_all = None; self.layer_points = None
 
-        self.btn_load = QtWidgets.QPushButton("Load hyperstack (.tif)"); self.btn_load.clicked.connect(self.load_image)
+        self.btn_load = QtWidgets.QPushButton("Load hyperstack (.tif / .nd2)"); self.btn_load.clicked.connect(self.load_image)
         self.layout().addWidget(self.btn_load)
 
         filter_row = QtWidgets.QHBoxLayout()
@@ -4925,11 +4925,22 @@ PipelinePanel.reset_pipeline = _pipeline_reset_multichannel
 
 
 def _pipeline_load_image_multichannel(self):
-    path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select a hyperstack (.tif)", "", "TIFF (*.tif *.tiff)")
+    path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select a hyperstack (.tif / .nd2)", "", "Image stacks (*.tif *.tiff *.nd2 *.ND2);;TIFF (*.tif *.tiff);;Nikon ND2 (*.nd2 *.ND2)")
     if not path:
         return
-    self.reset_pipeline()
-    self.img_all_channels = read_to_TCZYX(Path(path))
+    if Path(path).suffix.lower() == '.nd2':
+        try:
+            nd2_image = read_to_TCZYX(Path(path), nd2_parent=self)
+        except _S8ND2LoadCancelled:
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, 'ND2 loading', str(e))
+            return
+        self.reset_pipeline()
+        self.img_all_channels = nd2_image
+    else:
+        self.reset_pipeline()
+        self.img_all_channels = read_to_TCZYX(Path(path))
     self.n_channels = int(self.img_all_channels.shape[0])
     self.channel_states = {ch: _blank_channel_state() for ch in range(self.n_channels)}
     for ch in range(self.n_channels):
@@ -13846,11 +13857,175 @@ def _s8_units_enrich_combined(combined, cal=None):
     return combined
 
 
-# Cache calibration whenever a TIFF is read through either reader.
+# --- BEGIN PATCH: OPTIONAL NIKON ND2 INPUT ---
+# Requires nd2 >= 0.8 (python -m pip install nd2) only when opening an ND2 file.
+# Uses recorded axes/loop indices, keeping T/Z/channels and stage positions distinct.
+# The existing TIFF readers and all downstream analysis remain unchanged.
+class _S8ND2LoadCancelled(Exception):
+    pass
+
+
+def _s8_nd2_value(obj, name, default=None):
+    return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
+
+
+def _s8_nd2_calibration(ndfile, sizes, position, frames):
+    cal = _s8_default_calibration('ND2')
+    sources = []
+    cal['nd2_original_sizes'] = dict(sizes)
+    cal['nd2_position_index'] = int(position)
+    cal['nd2_position_count'] = int(sizes.get('P', 1))
+    cal['nd2_samples_per_channel'] = int(sizes.get('S', 1))
+    flags = None
+    try:
+        channels = _s8_nd2_value(ndfile.metadata, 'channels', []) or []
+        if channels:
+            flags = _s8_nd2_value(_s8_nd2_value(channels[0], 'volume'), 'axesCalibrated')
+        voxel = ndfile.voxel_size()
+        for i, axis in enumerate(('x', 'y', 'z')):
+            if axis == 'z' and sizes.get('Z', 1) <= 1:
+                continue
+            if flags is not None and (i >= len(flags) or not flags[i]):
+                continue
+            _s8_set_length_scale(cal, 'scale_' + axis, getattr(voxel, axis, None), 'µm', 'ND2 voxel size', sources)
+    except Exception:
+        pass
+    try:
+        experiment = ndfile.experiment or []
+    except Exception:
+        experiment = []
+    for loop in experiment:
+        if _s8_nd2_value(loop, 'type') == 'ZStackLoop' and sizes.get('Z', 1) > 1:
+            step = _s8_units_float(_s8_nd2_value(_s8_nd2_value(loop, 'parameters'), 'stepUm'))
+            if step is not None:
+                _s8_set_length_scale(cal, 'scale_z', abs(step), 'µm', 'ND2 Z step', sources)
+
+    # Read one timestamp per time point at the same position/Z plane. Adjacent
+    # acquisition frames can instead be different Z slices or stage positions.
+    cal['nd2_time_sampling'] = 'unknown'
+    if sizes.get('T', 1) > 1:
+        by_time = {int(idx.get('T', 0)): seq for seq, idx in frames if int(idx.get('Z', 0)) == 0}
+        stamps = []
+        try:
+            for t in range(int(sizes['T'])):
+                meta = ndfile.frame_metadata(by_time[t])
+                channels = _s8_nd2_value(meta, 'channels', []) or []
+                stamp = _s8_units_float(_s8_nd2_value(_s8_nd2_value(channels[0], 'time'), 'relativeTimeMs'))
+                if stamp is None or not np.isfinite(stamp):
+                    raise ValueError('Missing ND2 timestamp')
+                stamps.append(stamp)
+        except Exception:
+            stamps = []
+        if len(stamps) == int(sizes['T']):
+            intervals = np.diff(np.asarray(stamps, dtype=float))
+            period = float(np.median(intervals))
+            if period > 0 and np.all(intervals > 0) and np.allclose(intervals, period, rtol=0.05, atol=0.1):
+                _s8_set_time_scale(cal, period, 'ms', 'ND2 frame timestamps', sources)
+                cal['nd2_time_sampling'] = 'regular'
+            else:
+                # A single scale cannot describe variable sampling. Preserve the
+                # existing frame-based analysis rather than inventing a frame rate.
+                cal['nd2_time_sampling'] = 'variable; time measurements use frames'
+        else:
+            for loop in experiment:
+                if _s8_nd2_value(loop, 'type') == 'TimeLoop':
+                    period = _s8_nd2_value(_s8_nd2_value(loop, 'parameters'), 'periodMs')
+                    if _s8_set_time_scale(cal, period, 'ms', 'ND2 time loop', sources):
+                        cal['nd2_time_sampling'] = 'regular (metadata interval)'
+                    break
+    cal['source'] = ', '.join(sources) if sources else 'ND2 (no physical calibration)'
+    return _s8_finalize_calibration(cal)
+
+
+def _s8_read_nd2_to_TCZYX(img_path: Path, position=None, parent=None):
+    global _S8_LAST_IMAGE_CALIBRATION, _S8_LAST_IMAGE_PATH
+    try:
+        import nd2
+    except ImportError as e:
+        raise ImportError("ND2 input requires the optional 'nd2' package.\nInstall it in the same Python environment as tWRM8:\npython -m pip install nd2") from e
+    path = str(Path(img_path))
+    cache_path = None
+    out = None
+    prog = None
+    try:
+        with nd2.ND2File(path) as ndfile:
+            if not hasattr(ndfile, 'read_frame') or not hasattr(ndfile, 'loop_indices'):
+                raise ImportError('ND2 input requires nd2 >= 0.8.\nUpdate it in the tWRM8 environment:\npython -m pip install --upgrade nd2')
+            sizes = {str(ax).upper(): int(n) for ax, n in ndfile.sizes.items()}
+            extra = [ax for ax, n in sizes.items() if ax not in ('T', 'Z', 'C', 'Y', 'X', 'P', 'S') and n > 1]
+            if extra:
+                raise ValueError('Unsupported ND2 acquisition dimensions: ' + ', '.join(extra))
+            if any(n <= 0 for n in sizes.values()):
+                raise ValueError('ND2 file has invalid or empty image dimensions.')
+            n_positions = int(sizes.get('P', 1))
+            app = QtWidgets.QApplication.instance()
+            if position is None and n_positions > 1:
+                if app is None:
+                    raise ValueError(f'ND2 contains {n_positions} stage positions. Supply position=0..{n_positions - 1} to _s8_read_nd2_to_TCZYX.')
+                chosen, ok = QtWidgets.QInputDialog.getInt(parent or app.activeWindow(), 'ND2 stage position',
+                    f'This file contains {n_positions} positions.\nSelect one position to analyze (1–{n_positions}):', 1, 1, n_positions, 1)
+                if not ok:
+                    raise _S8ND2LoadCancelled()
+                position = chosen - 1
+            position = 0 if position is None else int(position)
+            if not 0 <= position < n_positions:
+                raise ValueError(f'ND2 position index {position} is outside 0..{n_positions - 1}.')
+            C, S = int(sizes.get('C', 1)), int(sizes.get('S', 1))
+            T, Z = int(sizes.get('T', 1)), int(sizes.get('Z', 1))
+            Y, X = int(sizes.get('Y', 1)), int(sizes.get('X', 1))
+            shape = (C * S, T, Z, Y, X)
+            frames = [(seq, idx) for seq, idx in enumerate(ndfile.loop_indices) if int(idx.get('P', 0)) == position]
+            locations = [(int(idx.get('T', 0)), int(idx.get('Z', 0))) for _, idx in frames]
+            if len(frames) != T * Z or len(set(locations)) != T * Z or any(not (0 <= t < T and 0 <= z < Z) for t, z in locations):
+                raise ValueError('ND2 frame indices do not match its recorded time/depth dimensions.')
+            dtype = np.dtype(ndfile.dtype)
+            if '_s8_should_spill' in globals() and _s8_should_spill(shape, dtype):
+                import tempfile
+                stem = ''.join(ch if (ch.isalnum() or ch in ('-', '_', '.')) else '_' for ch in Path(path).stem).strip('._') or 'napari_analysis'
+                root = Path(path).parent / f'{stem}_s8_live_analysis'
+                root.mkdir(parents=True, exist_ok=True)
+                fd, cache_path = tempfile.mkstemp(prefix=f'nd2_raw_pos{position}_', suffix='.npy', dir=str(root))
+                os.close(fd)
+                out = np.lib.format.open_memmap(cache_path, mode='w+', dtype=dtype, shape=shape)
+            else:
+                out = np.empty(shape, dtype=dtype)
+            if app is not None:
+                prog = StepProgress('Loading ND2', maximum=len(frames), parent=parent)
+                prog.set_text(f'Reading position {position + 1}/{n_positions}: {T} time points, {Z} Z planes, {C * S} channels...')
+            for done, (seq, idx) in enumerate(frames, start=1):
+                frame = np.asarray(ndfile.read_frame(seq)).reshape(C, Y, X, S)
+                # RGB samples, when present, remain separate channels; no mixing.
+                out[:, int(idx.get('T', 0)), int(idx.get('Z', 0))] = frame.transpose(0, 3, 1, 2).reshape(C * S, Y, X)
+                if prog is not None:
+                    prog.step(done)
+            if isinstance(out, np.memmap):
+                out.flush()
+            cal = _s8_nd2_calibration(ndfile, sizes, position, frames)
+        _S8_LAST_IMAGE_PATH = path
+        _S8_LAST_IMAGE_CALIBRATION = cal
+        return out
+    except Exception:
+        if cache_path is not None:
+            try:
+                if isinstance(out, np.memmap):
+                    out._mmap.close()
+                os.remove(cache_path)
+            except Exception:
+                pass
+        raise
+    finally:
+        if prog is not None:
+            prog.close()
+# --- END PATCH: OPTIONAL NIKON ND2 INPUT ---
+
+
+# Cache calibration whenever an image is read through either reader.
 try:
     _S8_PREV_READ_TO_TCZYX_UNITS = read_to_TCZYX
-    def read_to_TCZYX(img_path: Path):
+    def read_to_TCZYX(img_path: Path, nd2_parent=None):
         global _S8_LAST_IMAGE_CALIBRATION, _S8_LAST_IMAGE_PATH
+        if Path(img_path).suffix.lower() == '.nd2':
+            return _s8_read_nd2_to_TCZYX(img_path, parent=nd2_parent)
         try:
             _S8_LAST_IMAGE_PATH = str(Path(img_path))
             _S8_LAST_IMAGE_CALIBRATION = _s8_extract_tiff_calibration(Path(img_path))
@@ -13864,6 +14039,8 @@ try:
     _S8_PREV_READ_TO_TZYX_UNITS = read_to_TZYX
     def read_to_TZYX(img_path: Path):
         global _S8_LAST_IMAGE_CALIBRATION, _S8_LAST_IMAGE_PATH
+        if Path(img_path).suffix.lower() == '.nd2':
+            return _s8_read_nd2_to_TCZYX(img_path)[0]
         try:
             _S8_LAST_IMAGE_PATH = str(Path(img_path))
             _S8_LAST_IMAGE_CALIBRATION = _s8_extract_tiff_calibration(Path(img_path))
