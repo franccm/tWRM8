@@ -2,6 +2,8 @@
 
 **Spatiotemporal hypervolume analysis for dynamic biological signals**
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22968205.svg)](https://doi.org/10.5281/zenodo.22968205)
+
 `tWRM8` is a Python-based analysis platform for extracting and characterizing dynamic events from time-resolved biological imaging data.
 
 Rather than treating a biological signal as a sequence of independent images or a static region of interest, tWRM8 represents each event as a continuous object extending through space and time. These event-centered **4D hypervolumes** can then be quantified by their morphology, duration, intensity, recurrence, propagation, interactions, and higher-order population behavior.
@@ -36,6 +38,7 @@ tWRM8 supports analysis of time-resolved fluorescence and other multidimensional
 
 Current functionality includes:
 
+- TIFF hyperstack and native Nikon ND2 input
 - Dynamic ROI and event detection
 - Threshold-based and machine-learning-assisted ROI generation
 - 3D + time event reconstruction
@@ -63,6 +66,20 @@ Current functionality includes:
 - Linear discriminant analysis
 - Feature-weight analysis
 - Statistical export and downstream analysis
+
+## Supported image formats
+
+tWRM8 opens **TIFF hyperstacks** (`.tif`, `.tiff`) and **Nikon ND2 files** (`.nd2`) directly through **Load hyperstack (.tif / .nd2)**.
+
+ND2 support requires the optional **nd2 package, version 0.8 or newer**, installed in the same Python environment as tWRM8:
+
+```bash
+python -m pip install "nd2>=0.8"
+```
+
+ND2 import preserves the recorded time, channel, and Z dimensions. For files containing multiple stage positions, a dialog lets you select one position to analyze.
+
+Spatial calibration and regular time intervals are read from acquisition metadata when available. If time sampling is variable, time measurements remain in frames.
 
 ## Analysis philosophy
 
@@ -200,9 +217,14 @@ For scientific use, analysis parameters should be retained alongside exported da
 
 ## Citation
 
-A formal software citation will be added as tWRM8 approaches a stable public release.
+If you use tWRM8 in your research, please cite the software through Zenodo.
 
-Until then, users should cite the repository and the relevant version or commit used for analysis.
+| Citation target | DOI |
+| --- | --- |
+| Project (all versions) | [10.5281/zenodo.22968205](https://doi.org/10.5281/zenodo.22968205) |
+| Archived release v1.0.1 | [10.5281/zenodo.22968206](https://doi.org/10.5281/zenodo.22968206) |
+
+For reproducibility, cite the archived release used for analysis. If you use changes newer than an archived release, also record the exact GitHub commit.
 
 ## Author
 
